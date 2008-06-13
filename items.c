@@ -2,12 +2,16 @@
 /* $Id$ */
 #include "memcached.h"
 #include <sys/stat.h>
+#ifndef WIN32
 #include <sys/socket.h>
 #include <sys/signal.h>
 #include <sys/resource.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <errno.h>
+#else /* !WIN32 */
+#include <winsock2.h>
+#endif /* WIN32 */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>

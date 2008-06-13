@@ -208,7 +208,7 @@ char *stats_prefix_dump(int *length) {
       (need assoc.o to get the hash() function).
 ****************************************************************************/
 
-struct settings settings;
+struct the_settings settings;
 
 static char *current_test = "";
 static int test_count = 0;

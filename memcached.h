@@ -5,12 +5,19 @@
 #include "config.h"
 #endif
 
+#ifndef WIN32
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
 #include <event.h>
 #include <netdb.h>
+#else /* !WIN32 */
+#include "win32/win32.h"
+#include "../libevent/event.h"
+#endif /* WIN32 */
+#include <time.h>
+
 
 #define DATA_BUFFER_SIZE 2048
 #define UDP_READ_BUFFER_SIZE 65536
@@ -79,7 +86,7 @@ struct stats {
 
 #define MAX_VERBOSITY_LEVEL 2
 
-struct settings {
+struct the_settings {
     size_t maxbytes;
     int maxconns;
     int port;
@@ -99,7 +106,7 @@ struct settings {
 };
 
 extern struct stats stats;
-extern struct settings settings;
+extern struct the_settings settings;
 
 #define ITEM_LINKED 1
 #define ITEM_DELETED 2

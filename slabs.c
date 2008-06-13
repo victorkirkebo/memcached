@@ -11,12 +11,16 @@
  */
 #include "memcached.h"
 #include <sys/stat.h>
+#ifndef WIN32
 #include <sys/socket.h>
 #include <sys/signal.h>
 #include <sys/resource.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <errno.h>
+#else /* !WIN32 */
+#include <winsock2.h>
+#endif /* WIN32 */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -128,7 +132,7 @@ void slabs_init(const size_t limit, const double factor, const bool prealloc) {
 
         slabclass[i].size = size;
         slabclass[i].perslab = POWER_BLOCK / slabclass[i].size;
-        size *= factor;
+        size = (unsigned int) (size * factor);
         if (settings.verbose > 1) {
             fprintf(stderr, "slab class %3d: chunk size %6u perslab %5u\n",
                     i, slabclass[i].size, slabclass[i].perslab);
@@ -221,7 +225,7 @@ static int do_slabs_newslab(const unsigned int id) {
 void *do_slabs_alloc(const size_t size, unsigned int id) {
     slabclass_t *p;
 
-    if (id < POWER_SMALLEST || id > power_largest)
+    if (id < POWER_SMALLEST || id > (unsigned) power_largest)
         return NULL;
 
     p = &slabclass[id];
@@ -247,7 +251,7 @@ void *do_slabs_alloc(const size_t size, unsigned int id) {
     if (p->end_page_ptr) {
         void *ptr = p->end_page_ptr;
         if (--p->end_page_free != 0) {
-            p->end_page_ptr += p->size;
+            (char*)(p->end_page_ptr) += p->size;
         } else {
             p->end_page_ptr = 0;
         }
@@ -257,12 +261,12 @@ void *do_slabs_alloc(const size_t size, unsigned int id) {
     return NULL;  /* shouldn't ever get here */
 }
 
-void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
+void do_slabs_free(void *ptr, size_t size, unsigned int id) {
     slabclass_t *p;
 
     assert(((item *)ptr)->slabs_clsid == 0);
-    assert(id >= POWER_SMALLEST && id <= power_largest);
-    if (id < POWER_SMALLEST || id > power_largest)
+    assert(id >= POWER_SMALLEST && id <= (unsigned) power_largest);
+    if (id < POWER_SMALLEST || id > (unsigned) power_largest)
         return;
 
     p = &slabclass[id];
@@ -409,7 +413,7 @@ static void *memory_allocate(size_t size) {
             size += CHUNK_ALIGN_BYTES - (size % CHUNK_ALIGN_BYTES);
         }
 
-        mem_current += size;
+        (char*)mem_current += size;
         if (size < mem_avail) {
             mem_avail -= size;
         } else {

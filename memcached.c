@@ -17,6 +17,7 @@ std *
  */
 #include "memcached.h"
 #include <sys/stat.h>
+#ifndef WIN32
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <signal.h>
@@ -38,6 +39,15 @@ std *
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <errno.h>
+#else /* !WIN32 */
+#include "win32/config.h"
+#include "event.h"
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <process.h>
+#include "win32/ntservice.h"
+#include "win32/bsd_getopt.h"
+#endif /* WIN32 */
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -98,7 +108,7 @@ static void conn_free(conn *c);
 
 /** exported globals **/
 struct stats stats;
-struct settings settings;
+struct the_settings settings;
 
 /** file scope variables **/
 static item **todelete = NULL;
@@ -723,7 +733,7 @@ static int build_udp_headers(conn *c) {
         *hdr++ = c->msgused % 256;
         *hdr++ = 0;
         *hdr++ = 0;
-        assert((void *) hdr == (void *)c->msglist[i].msg_iov[0].iov_base + UDP_HEADER_SIZE);
+        assert((void *) hdr == (void *)((char*)c->msglist[i].msg_iov[0].iov_base + UDP_HEADER_SIZE));
     }
 
     return 0;
@@ -747,7 +757,7 @@ static void out_string(conn *c, const char *str) {
         fprintf(stderr, ">%d %s\n", c->sfd, str);
 
     len = strlen(str);
-    if ((len + 2) > c->wsize) {
+    if ((len + 2) > (size_t)c->wsize) {
         /* ought to be always enough. just fail for simplicity */
         str = "SERVER_ERROR output line too long";
         len = strlen(str);
@@ -769,11 +779,13 @@ static void out_string(conn *c, const char *str) {
  */
 
 static void complete_nread(conn *c) {
+    item *it;
+    int comm;
+    int ret;
     assert(c != NULL);
 
-    item *it = c->item;
-    int comm = c->item_comm;
-    int ret;
+    comm = c->item_comm;
+    it = c->item;
 
     STATS_LOCK();
     stats.set_cmds++;
@@ -1368,9 +1380,9 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     size_t nkey;
     int flags;
     time_t exptime;
-    int vlen, old_vlen;
+    int vlen;
     uint64_t req_cas_id;
-    item *it, *old_it;
+    item *it;
 
     assert(c != NULL);
 
@@ -1923,6 +1935,7 @@ static int try_read_udp(conn *c) {
 static int try_read_network(conn *c) {
     int gotdata = 0;
     int res;
+    int avail;
 
     assert(c != NULL);
 
@@ -1956,7 +1969,7 @@ static int try_read_network(conn *c) {
             c->request_addr_size = 0;
         }
 
-        int avail = c->rsize - c->rbytes;
+        avail = c->rsize - c->rbytes;
         res = read(c->sfd, c->rbuf + c->rbytes, avail);
         if (res > 0) {
             STATS_LOCK();
@@ -1986,9 +1999,10 @@ static int try_read_network(conn *c) {
 }
 
 static bool update_event(conn *c, const int new_flags) {
+    struct event_base *base;
     assert(c != NULL);
 
-    struct event_base *base = c->event.ev_base;
+    base = c->event.ev_base;
     if (c->ev_flags == new_flags)
         return true;
     if (event_del(&c->event) == -1) return false;
@@ -2054,7 +2068,7 @@ static int transmit(conn *c) {
 
             /* We've written some of the data. Remove the completed
                iovec entries from the list of pending writes. */
-            while (m->msg_iovlen > 0 && res >= m->msg_iov->iov_len) {
+            while (m->msg_iovlen > 0 && res >= (ssize_t) m->msg_iov->iov_len) {
                 res -= m->msg_iov->iov_len;
                 m->msg_iovlen--;
                 m->msg_iov++;
@@ -2366,7 +2380,7 @@ static void maximize_sndbuf(const int sfd) {
     int old_size;
 
     /* Start with the default size. */
-    if (getsockopt(sfd, SOL_SOCKET, SO_SNDBUF, &old_size, &intsize) != 0) {
+    if (getsockopt(sfd, SOL_SOCKET, SO_SNDBUF, (char*)&old_size, &intsize) != 0) {
         if (settings.verbose > 0)
             perror("getsockopt(SO_SNDBUF)");
         return;
@@ -2407,7 +2421,11 @@ static int server_socket(const int port, const bool is_udp) {
      * that otherwise mess things up.
      */
     memset(&hints, 0, sizeof (hints));
+#ifndef WIN32
     hints.ai_flags = AI_PASSIVE|AI_ADDRCONFIG;
+#else
+    hints.ai_flags = AI_PASSIVE;
+#endif
     if (is_udp)
     {
         hints.ai_protocol = IPPROTO_UDP;
@@ -2422,9 +2440,11 @@ static int server_socket(const int port, const bool is_udp) {
     snprintf(port_buf, NI_MAXSERV, "%d", port);
     error= getaddrinfo(settings.inter, port_buf, &hints, &ai);
     if (error != 0) {
+#ifndef WIN32
       if (error != EAI_SYSTEM)
         fprintf(stderr, "getaddrinfo(): %s\n", gai_strerror(error));
       else
+#endif
         perror("getaddrinfo()");
 
       return 1;
@@ -2510,6 +2530,7 @@ static int new_socket_unix(void) {
     return sfd;
 }
 
+#ifndef WIN32
 static int server_socket_unix(const char *path, int access_mask) {
     int sfd;
     struct linger ling = {0, 0};
@@ -2567,6 +2588,7 @@ static int server_socket_unix(const char *path, int access_mask) {
 
     return 0;
 }
+#endif /* !WIN32 */
 
 /*
  * We keep the current time of day in a global variable that's updated by a
@@ -2579,6 +2601,46 @@ static int server_socket_unix(const char *path, int access_mask) {
 volatile rel_time_t current_time;
 static struct event clockevent;
 
+#ifdef WIN32
+/*
+ * Number of micro-seconds between the beginning of the Windows epoch
+ * (Jan. 1, 1601) and the Unix epoch (Jan. 1, 1970).
+ *
+ * This assumes all Win32 compilers have 64-bit support.
+ */
+#if defined(_MSC_VER) || defined(_MSC_EXTENSIONS) || defined(__WATCOMC__)
+  #define DELTA_EPOCH_IN_USEC  11644473600000000Ui64
+#else
+  #define DELTA_EPOCH_IN_USEC  11644473600000000ULL
+#endif
+
+static unsigned __int64 filetime_to_unix_epoch (const FILETIME *ft)
+{
+    unsigned __int64 res = (unsigned __int64) ft->dwHighDateTime << 32;
+
+    res |= ft->dwLowDateTime;
+    res /= 10;                   /* from 100 nano-sec periods to usec */
+    res -= DELTA_EPOCH_IN_USEC;  /* from Win epoch to Unix epoch */
+    return (res);
+}
+
+int gettimeofday (struct timeval *tv, void *tz)
+{
+    FILETIME  ft;
+    unsigned __int64 tim;
+
+    if (!tv) {
+        set_errno(EINVAL);
+        return (-1);
+    }
+    GetSystemTimeAsFileTime (&ft);
+    tim = filetime_to_unix_epoch (&ft);
+    tv->tv_sec  = (long) (tim / 1000000L);
+    tv->tv_usec = (long) (tim % 1000000L);
+    return (0);
+}
+#endif
+
 /* time-sensitive callers can call it by hand with this, outside the normal ever-1-second timer */
 static void set_current_time(void) {
     struct timeval timer;
@@ -2588,7 +2650,7 @@ static void set_current_time(void) {
 }
 
 static void clock_handler(const int fd, const short which, void *arg) {
-    struct timeval t = {.tv_sec = 1, .tv_usec = 0};
+    struct timeval t = {t.tv_sec = 1, t.tv_usec = 0};
     static bool initialized = false;
 
     if (initialized) {
@@ -2608,7 +2670,7 @@ static void clock_handler(const int fd, const short which, void *arg) {
 static struct event deleteevent;
 
 static void delete_handler(const int fd, const short which, void *arg) {
-    struct timeval t = {.tv_sec = 5, .tv_usec = 0};
+    struct timeval t = {t.tv_sec = 5, t.tv_usec = 0};
     static bool initialized = false;
 
     if (initialized) {
@@ -2650,9 +2712,17 @@ static void usage(void) {
            "-U <num>      UDP port number to listen on (default: 0, off)\n"
            "-s <file>     unix socket path to listen on (disables network support)\n"
            "-a <mask>     access mask for unix socket, in octal (default 0700)\n"
-           "-l <ip_addr>  interface to listen on, default is INDRR_ANY\n"
-           "-d            run as a daemon\n"
-           "-r            maximize core file limit\n"
+           "-l <ip_addr>  interface to listen on, default is INDRR_ANY\n");
+#ifndef WIN32
+    printf("-d            run as a daemon\n");
+#else /* !WIN32 */
+    printf("-d start          tell memcached to start\n"
+           "-d restart        tell running memcached to do a graceful restart\n"
+           "-d stop|shutdown  tell running memcached to shutdown\n"
+           "-d install        install memcached service\n"
+           "-d uninstall      uninstall memcached service\n");
+#endif /* WIN32 */
+    printf("-r            maximize core file limit\n"
            "-u <username> assume identity of <username> (only when run as root)\n"
            "-m <num>      max memory to use for items in megabytes, default is 64 MB\n"
            "-M            return error on memory exhausted (rather than removing items)\n"
@@ -2785,6 +2855,17 @@ static void remove_pidfile(const char *pid_file) {
 
 }
 
+void run_server()
+{
+    /* enter the loop */
+    event_loop(0);
+}
+
+void stop_server()
+{
+    /* exit the loop */
+    event_loopexit(NULL);
+}
 
 static void sig_handler(const int sig) {
     printf("SIGINT handled.\n");
@@ -2834,16 +2915,12 @@ int enable_large_pages(void) {
 
 int main (int argc, char **argv) {
     int c;
-    int x;
     bool lock_memory = false;
     bool daemonize = false;
     bool preallocate = false;
     int maxcore = 0;
     char *username = NULL;
     char *pid_file = NULL;
-    struct passwd *pw;
-    struct sigaction sa;
-    struct rlimit rlim;
     /* listening socket */
     static int *l_socket = NULL;
 
@@ -2851,8 +2928,20 @@ int main (int argc, char **argv) {
     static int *u_socket = NULL;
     static int u_socket_count = 0;
 
+#ifndef WIN32
+    struct passwd *pw;
+    struct sigaction sa;
+    struct rlimit rlim;
+
     /* handle SIGINT */
     signal(SIGINT, sig_handler);
+#else /* !WIN32 */
+    WSADATA wsaData;
+    if(WSAStartup(MAKEWORD(2,0), &wsaData) != 0) {
+        fprintf(stderr, "Socket Initialization Error. Program  aborted\n");
+        return;
+    }
+#endif /* WIN32 */
 
     /* init settings */
     settings_init();
@@ -2861,7 +2950,7 @@ int main (int argc, char **argv) {
     setbuf(stderr, NULL);
 
     /* process arguments */
-    while ((c = getopt(argc, argv, "a:bp:s:U:m:Mc:khirvdl:u:P:f:s:n:t:D:L")) != -1) {
+    while ((c = getopt(argc, argv, "a:bp:s:U:m:Mc:khirvd:l:u:P:f:s:n:t:D:L")) != -1) {
         switch (c) {
         case 'a':
             /* access for unix domain socket, as octal mask (like chmod)*/
@@ -2906,6 +2995,16 @@ int main (int argc, char **argv) {
             break;
         case 'd':
             daemonize = true;
+#ifdef WIN32
+            if(!optarg || !strcmpi(optarg, "runservice")) daemonize = 1;
+            else if(!strcmpi(optarg, "start")) daemonize = 2;
+            else if(!strcmpi(optarg, "restart")) daemonize = 3;
+            else if(!strcmpi(optarg, "stop")) daemonize = 4;
+            else if(!strcmpi(optarg, "shutdown")) daemonize = 5;
+            else if(!strcmpi(optarg, "install")) daemonize = 6;
+            else if(!strcmpi(optarg, "uninstall")) daemonize = 7;
+            else fprintf(stderr, "Illegal argument: \"%s\"\n", optarg);
+#endif /* WIN32 */
             break;
         case 'r':
             maxcore = 1;
@@ -2958,6 +3057,7 @@ int main (int argc, char **argv) {
         }
     }
 
+#ifndef WIN32
     if (maxcore != 0) {
         struct rlimit rlim_new;
         /*
@@ -3003,6 +3103,7 @@ int main (int argc, char **argv) {
             exit(EXIT_FAILURE);
         }
     }
+#endif /* !WIN32 */
 
     /* lock paged memory if needed */
     if (lock_memory) {
@@ -3017,6 +3118,7 @@ int main (int argc, char **argv) {
 #endif
     }
 
+#ifndef WIN32
     /* lose root privileges if we have them */
     if (getuid() == 0 || geteuid() == 0) {
         if (username == 0 || *username == '\0') {
@@ -3044,6 +3146,42 @@ int main (int argc, char **argv) {
         }
     }
 
+#else /* !WIN32 */
+    switch(daemonize) {
+        case 2:
+            if(!ServiceStart()) {
+                fprintf(stderr, "failed to start service\n");
+                return 1;
+            }
+            exit(0);
+        case 3:
+            if(!ServiceRestart()) {
+                fprintf(stderr, "failed to restart service\n");
+                return 1;
+            }
+            exit(0);
+        case 4:
+        case 5:
+            if(!ServiceStop()) {
+                fprintf(stderr, "failed to stop service\n");
+                return 1;
+            }
+            exit(0);
+        case 6:
+            if(!ServiceInstall()) {
+                fprintf(stderr, "failed to install service or service already installed\n");
+                return 1;
+            }
+            exit(0);
+        case 7:
+            if(!ServiceUninstall()) {
+                fprintf(stderr, "failed to uninstall service or service not installed\n");
+                return 1;
+            }
+            exit(0);
+    }
+#endif /* WIN32 */
+
 
     /* initialize main thread libevent instance */
     main_base = event_init();
@@ -3067,6 +3205,7 @@ int main (int argc, char **argv) {
         memset(buckets, 0, sizeof(int) * MAX_BUCKETS);
     }
 
+#ifndef WIN32
     /*
      * ignore SIGPIPE signals; we can use errno==EPIPE if we
      * need that information
@@ -3078,6 +3217,8 @@ int main (int argc, char **argv) {
         perror("failed to ignore SIGPIPE; sigaction");
         exit(EXIT_FAILURE);
     }
+#endif /* !WIN32 */
+
     /* start up worker threads if MT mode */
     thread_init(settings.num_threads, main_base);
     /* save the PID in if we're a daemon, do this after thread_init due to
@@ -3095,6 +3236,7 @@ int main (int argc, char **argv) {
     }
     delete_handler(0, 0, 0); /* sets up the event */
 
+#ifndef WIN32
     /* create unix mode sockets after dropping privileges */
     if (settings.socketpath != NULL) {
         if (server_socket_unix(settings.socketpath,settings.access)) {
@@ -3102,6 +3244,7 @@ int main (int argc, char **argv) {
           exit(EXIT_FAILURE);
         }
     }
+#endif
 
     /* create the listening socket, bind it, and init */
     if (settings.socketpath == NULL) {
@@ -3126,8 +3269,18 @@ int main (int argc, char **argv) {
         }
     }
 
+#ifdef WIN32
+    if (daemonize) {
+	ServiceSetFunc(run_server, NULL, NULL, stop_server);
+        ServiceRun();
+    } else {
+        event_base_loop(main_base, 0);
+    }
+#else
     /* enter the event loop */
     event_base_loop(main_base, 0);
+#endif /* WIN32 */
+
     /* remove the PID file if we're a daemon */
     if (daemonize)
         remove_pidfile(pid_file);
