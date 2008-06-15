@@ -5,18 +5,18 @@
 #include "config.h"
 #endif
 
-#ifndef WIN32
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <netinet/in.h>
-#include <event.h>
-#include <netdb.h>
-#else /* !WIN32 */
-#include "win32/win32.h"
-#include "../libevent/event.h"
-#endif /* WIN32 */
 #include <time.h>
+#ifdef WIN32
+# include "win32/win32.h"
+# include "../libevent/event.h"
+#else /* !WIN32 */
+# include <sys/types.h>
+# include <sys/socket.h>
+# include <sys/time.h>
+# include <netinet/in.h>
+# include <event.h>
+# include <netdb.h>
+#endif /* WIN32 */
 
 
 #define DATA_BUFFER_SIZE 2048

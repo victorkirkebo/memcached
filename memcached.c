@@ -41,7 +41,7 @@ std *
 #include <errno.h>
 #else /* !WIN32 */
 #include "win32/config.h"
-#include "event.h"
+#include "../libevent/event.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <process.h>
@@ -783,7 +783,7 @@ static void complete_nread(conn *c) {
     int comm;
     int ret;
     assert(c != NULL);
-
+    
     comm = c->item_comm;
     it = c->item;
 
@@ -1115,7 +1115,7 @@ static void process_stat(conn *c, token_t *tokens, const size_t ntokens) {
 #endif /* HAVE_STRUCT_MALLINFO */
 #endif /* HAVE_MALLOC_H */
 
-#if !defined(WIN32) || !defined(__APPLE__)
+#if !defined(WIN32) && !defined(__APPLE__)
     if (strcmp(subcommand, "maps") == 0) {
         char *wbuf;
         int wsize = 8192; /* should be enough */
@@ -2000,7 +2000,7 @@ static int try_read_network(conn *c) {
 
 static bool update_event(conn *c, const int new_flags) {
     struct event_base *base;
-    assert(c != NULL);
+    assert(c != NULL);    
 
     base = c->event.ev_base;
     if (c->ev_flags == new_flags)
@@ -2928,7 +2928,7 @@ int main (int argc, char **argv) {
     static int *u_socket = NULL;
     static int u_socket_count = 0;
 
-#ifndef WIN32
+#ifndef WIN32    
     struct passwd *pw;
     struct sigaction sa;
     struct rlimit rlim;
@@ -3103,7 +3103,7 @@ int main (int argc, char **argv) {
             exit(EXIT_FAILURE);
         }
     }
-#endif /* !WIN32 */
+#endif /* !WIN32 */    
 
     /* lock paged memory if needed */
     if (lock_memory) {
@@ -3145,7 +3145,7 @@ int main (int argc, char **argv) {
             return 1;
         }
     }
-
+    
 #else /* !WIN32 */
     switch(daemonize) {
         case 2:
@@ -3218,7 +3218,7 @@ int main (int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 #endif /* !WIN32 */
-
+    
     /* start up worker threads if MT mode */
     thread_init(settings.num_threads, main_base);
     /* save the PID in if we're a daemon, do this after thread_init due to
@@ -3271,12 +3271,12 @@ int main (int argc, char **argv) {
 
 #ifdef WIN32
     if (daemonize) {
-	ServiceSetFunc(run_server, NULL, NULL, stop_server);
+    	ServiceSetFunc(run_server, NULL, NULL, stop_server);
         ServiceRun();
     } else {
         event_base_loop(main_base, 0);
     }
-#else
+#else    
     /* enter the event loop */
     event_base_loop(main_base, 0);
 #endif /* WIN32 */
